@@ -32,7 +32,8 @@
 
 // commands (see datasheet)
 #define OLED_SET_CONTRAST _u(0x81)
-#define OLED_SET_ENTIRE_ON _u(0xA4)
+#define OLED_SET_ENTIRE_OFF _u(0xA4)
+#define OLED_SET_ENTIRE_ON _u(0xA5)
 #define OLED_SET_NORM_INV _u(0xA6)
 #define OLED_SET_DISP _u(0xAE)
 #define OLED_SET_MEM_ADDR _u(0x20)
@@ -61,15 +62,19 @@
 #define OLED_WRITE_MODE _u(0xFE)
 #define OLED_READ_MODE _u(0xFF)
 
-struct render_area
+typedef struct render_area
 {
   uint8_t start_col;
   uint8_t end_col;
   uint8_t start_page;
   uint8_t end_page;
+} render_area;
 
-  int buflen;
-};
+typedef struct glyph
+{
+  int len;
+  uint8_t *buf;
+} glyph;
 
 void fill(uint8_t buf[], uint8_t fill)
 {
@@ -130,10 +135,10 @@ void print_buf_area(uint8_t *buf, struct render_area *area)
   }
 }
 
-void calc_render_area_buflen(struct render_area *area)
+int calc_render_area(struct render_area *area)
 {
   // calculate how long the flattened buffer will be for a render area
-  area->buflen = (area->end_col - area->start_col + 1) * (area->end_page - area->start_page + 1);
+  return (area->end_col - area->start_col + 1) * (area->end_page - area->start_page + 1);
 }
 
 #ifdef i2c_default
@@ -231,18 +236,18 @@ void oled_init()
   oled_send_cmd(OLED_SET_DISP | 0x01); // turn display on
 }
 
-void render(uint8_t *buf, struct render_area *area)
+void render(glyph *gly, render_area *ra)
 {
   // update a portion of the display with a render area
   oled_send_cmd(OLED_SET_COL_ADDR);
-  oled_send_cmd(area->start_col);
-  oled_send_cmd(area->end_col);
+  oled_send_cmd(ra->start_col);
+  oled_send_cmd(ra->end_col);
 
   oled_send_cmd(OLED_SET_PAGE_ADDR);
-  oled_send_cmd(area->start_page);
-  oled_send_cmd(area->end_page);
+  oled_send_cmd(ra->start_page);
+  oled_send_cmd(ra->end_page);
 
-  oled_send_buf(buf, area->buflen);
+  oled_send_buf(gly->buf, gly->len);
 }
 
 #endif
@@ -251,15 +256,9 @@ int main()
 {
   stdio_init_all();
 
-#if !defined(i2c_default) || !defined(PICO_DEFAULT_I2C_SDA_PIN) || !defined(PICO_DEFAULT_I2C_SCL_PIN)
-#warning i2c / oled_i2d example requires a board with I2C pins
-  puts("Default I2C pins were not defined");
-#else
   // useful information for picotool
   bi_decl(bi_2pins_with_func(PICO_DEFAULT_I2C_SDA_PIN, PICO_DEFAULT_I2C_SCL_PIN, GPIO_FUNC_I2C));
   bi_decl(bi_program_description("OLED I2C example for the Raspberry Pi Pico"));
-
-  printf("Hello, OLED display! Look at my raspberries..\n");
 
   // I2C is "open drain", pull ups to keep signal high when no data is being
   // sent
@@ -272,60 +271,45 @@ int main()
   // run through the complete initialization process
   oled_init();
 
-  // initialize render area for entire frame (128 pixels by 4 pages)
-  struct render_area frame_area = {start_col : 0, end_col : OLED_WIDTH - 1, start_page : 0, end_page : OLED_NUM_PAGES - 1};
-  calc_render_area_buflen(&frame_area);
-
-  // zero the entire display
-  uint8_t buf[OLED_BUF_LEN];
-  fill(buf, 0x00);
-  render(buf, &frame_area);
+  // initialize render area for entire frame (128 pixels by 4 pages) and zero the entire display
+  // allocate frame
+  render_area *frame_area = malloc(sizeof(render_area));
+  frame_area->start_col = 0;
+  frame_area->end_col = OLED_WIDTH - 1;
+  frame_area->start_page = 0;
+  frame_area->end_page = OLED_NUM_PAGES - 1;
+  // allocate glyph (whole screen in this case)
+  uint8_t *buf = calloc(calc_render_area(frame_area), sizeof(uint8_t));
+  glyph *blank_screen = malloc(sizeof(glyph));
+  blank_screen->buf = buf;
+  blank_screen->len = calc_render_area(frame_area);
+  // render it
+  render(blank_screen, frame_area);
+  // clean up
+  free(buf);
+  free(blank_screen);
 
   // intro sequence: flash the screen 3 times
   for (int i = 0; i < 3; i++)
   {
-    oled_send_cmd(0xA5); // ignore RAM, all pixels on
+    oled_send_cmd(OLED_SET_ENTIRE_ON); // ignore RAM, all pixels on
     sleep_ms(500);
-    oled_send_cmd(0xA4); // go back to following RAM
+    oled_send_cmd(OLED_SET_ENTIRE_OFF); // go back to following RAM
     sleep_ms(500);
   }
 
-  // render 3 cute little raspberries
-  struct render_area area = {start_col : 0, end_col : IMG_WIDTH - 1, start_page : 0, end_page : OLED_NUM_PAGES - 1};
-  calc_render_area_buflen(&area);
-  render(raspberry26x32, &area);
-  for (int i = 1; i < 3; i++)
-  {
-    uint8_t offset = 5 + IMG_WIDTH; // 5px padding
-    area.start_col += offset;
-    area.end_col += offset;
-    render(raspberry26x32, &area);
-  }
+  // render a cute little raspberry
+  struct render_area raspberry_area = {
+    start_col : 0,
+    end_col : IMG_WIDTH - 1,
+    start_page : 0,
+    end_page : (IMG_HEIGHT - 1) / OLED_PAGE_HEIGHT
+  };
+  glyph raspberry = {
+    len : calc_render_area(&raspberry_area),
+    buf : raspberry26x32
+  };
+  render(&raspberry, &raspberry_area);
 
-  // render 3 cute little raspberries
-  struct render_area area2 = {start_col : 0, end_col : IMG_WIDTH - 1, start_page : (IMG_HEIGHT / 8) + 1, end_page : OLED_NUM_PAGES - 1};
-  calc_render_area_buflen(&area2);
-  render(raspberry26x32, &area2);
-  for (int i = 1; i < 3; i++)
-  {
-    uint8_t offset = 5 + IMG_WIDTH; // 5px padding
-    area2.start_col += offset;
-    area2.end_col += offset;
-    render(raspberry26x32, &area2);
-  }
-
-  // configure horizontal scrolling
-  oled_send_cmd(OLED_SET_HORIZ_SCROLL | 0x00);
-  oled_send_cmd(0x00); // dummy byte
-  oled_send_cmd(0x00); // start page 0
-  oled_send_cmd(0x00); // time interval
-  oled_send_cmd(0x07); // end page 6
-  oled_send_cmd(0x00); // dummy byte
-  oled_send_cmd(0xFF); // dummy byte
-
-  // let's goooo!
-  oled_send_cmd(OLED_SET_SCROLL | 0x01);
-
-#endif
   return 0;
 }
