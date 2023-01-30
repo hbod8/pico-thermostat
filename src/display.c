@@ -95,11 +95,11 @@ void dump_glyph(glyph *gly)
   printf("dumping glyph: %d x %d\n", gly->width, gly->height);
   for (int i = 0; i < gly->height; i++)
   {
-    for (int j = 0; j < (gly->width / 8); j++)
+    for (int j = 0; j < (gly->width / 8) + 1; j++)
     {
       for (int k = 0; k < 8; k++)
       {
-        printf("%s", (gly->buf[i * (gly->width / 8) + j] >> k) & 0x01 ? "X" : " ");
+        printf("%s", (gly->buf[i * ((gly->width / 8) + 1) + j] >> k) & 0x01 ? "X" : " ");
       }
     }
     printf("\n");
