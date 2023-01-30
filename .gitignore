@@ -1,2 +1,4 @@
 pico-sdk
 pico_sdk_import.cmake
+build
+.vscode
